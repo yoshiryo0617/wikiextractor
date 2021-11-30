@@ -2659,9 +2659,9 @@ def compact(text):
                     if options.keepSections:
                         # emit open sections
                         items = sorted(headers.items())
-                        for i, v in items:
+                        for j, v in items:
                             # page.append("Section::::" + v)
-                            page.append(get_seciton_header_name(i,v))
+                            page.append(get_seciton_header_name(j,v))
                     headers.clear()
                     # use item count for #-lines
                     listCount[i - 1] += 1
