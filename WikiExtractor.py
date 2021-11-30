@@ -70,7 +70,7 @@ import json
 from io import StringIO
 from multiprocessing import Queue, Process, Value, cpu_count
 from timeit import default_timer
-
+import wiki_utils
 
 PY2 = sys.version_info[0] == 2
 # Python 2.7 compatibiity
@@ -285,7 +285,7 @@ def get_url(uid):
 
 selfClosingTags = ('br', 'hr', 'nobr', 'ref', 'references', 'nowiki')
 
-placeholder_tags = {'math': 'formula', 'code': 'codice'}
+placeholder_tags = {'math': wiki_utils.get_formula_token(), 'code': wiki_utils.get_codesnipet_token()}
 
 
 def normalizeTitle(title):
@@ -801,10 +801,10 @@ class Extractor(object):
         for pattern, placeholder in placeholder_tag_patterns:
             index = 1
             for match in pattern.finditer(text):
-                text = text.replace(match.group(), '%s_%d' % (placeholder, index))
+                text = text.replace(match.group(), '%s' % (placeholder))
                 index += 1
 
-        text = text.replace('<<', '«').replace('>>', '»')
+        text = text.replace('<<', 'Â«').replace('>>', 'Â»')
 
         #############################################
 
@@ -812,8 +812,8 @@ class Extractor(object):
         text = text.replace('\t', ' ')
         text = spaces.sub(' ', text)
         text = dots.sub('...', text)
-        text = re.sub(' (,:\.\)\]»)', r'\1', text)
-        text = re.sub('(\[\(«) ', r'\1', text)
+        text = re.sub(' (,:\.\)\]Â»)', r'\1', text)
+        text = re.sub('(\[\(Â«) ', r'\1', text)
         text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)  # lines with only punctuations
         text = text.replace(',,', ',').replace(',.', '.')
         if options.keep_tables:
@@ -2518,6 +2518,17 @@ def makeExternalLink(url, anchor):
     else:
         return anchor
 
+def fix_list_item (list_item):
+    list_item = list_item.strip()
+    if not list_item.endswith('.'):
+        if list_item.endswith((';', ',')):
+            list_item = list_item[:-1] + '.'
+        else:
+            list_item = list_item + '.'
+            #list_item = list_item.replace(len(list_item) - 1, '.')
+
+    return list_item
+
 
 def makeExternalImage(url, alt=''):
     if options.keepLinks:
@@ -2541,6 +2552,19 @@ listClose = {'*': '</ul>', '#': '</ol>', ';': '</dl>', ':': '</dl>'}
 listItem = {'*': '<li>%s</li>', '#': '<li>%s</<li>', ';': '<dt>%s</dt>',
             ':': '<dd>%s</dd>'}
 
+omitted_sections = ["Further reading", "External links", "References", "See also", "Bibliography", "References", "Footnotes"]
+
+def get_seciton_header_name(height, text):
+    numbers = int(sum(c.isdigit() for c in text.replace('.', '')))
+    words = int(sum(c.isalpha() for c in text.replace('.', '')))
+
+    clean_text  = text.replace('.', '') + '.'
+    header = wiki_utils.get_segment_seperator(height, clean_text)
+
+    if words + numbers == 0:
+        print ('error in section. The header: ' + header)
+
+    return header
 
 def compact(text):
     """Deal with headers, lists, empty sections, residuals of tables.
@@ -2552,6 +2576,9 @@ def compact(text):
     emptySection = False  # empty sections are discarded
     listLevel = []        # nesting of lists
     listCount = []        # count of each list (it should be always in the same length of listLevel)
+
+    current_section_name = ""
+
     for line in text.split('\n'):
         if not line:            # collapse empty lines
             # if there is an opening list, close it if we see an empty line
@@ -2571,6 +2598,8 @@ def compact(text):
         if m:
             title = m.group(2)
             lev = len(m.group(1)) # header level
+            if lev == 2:
+                current_section_name = title
             if options.toHTML:
                 page.append("<h%d>%s</h%d>" % (lev, title, lev))
             if title and title[-1] not in '!?':
@@ -2630,13 +2659,17 @@ def compact(text):
                     if options.keepSections:
                         # emit open sections
                         items = sorted(headers.items())
-                        for _, v in items:
-                            page.append("Section::::" + v)
+                        for i, v in items:
+                            # page.append("Section::::" + v)
+                            page.append(get_seciton_header_name(i,v))
                     headers.clear()
                     # use item count for #-lines
                     listCount[i - 1] += 1
                     bullet = 'BULLET::::%d. ' % listCount[i - 1] if n == '#' else 'BULLET::::- '
-                    page.append('{0:{1}s}'.format(bullet, len(listLevel)) + line)
+                    #uncomment to keep list bullets
+                    # page.append('{0:{1}s}'.format(bullet, len(listLevel)) + line)
+                    page.append(wiki_utils.get_list_token() + ". " )
+
                 elif options.toHTML:
                     if n not in listItem: 
                         n = '*'
@@ -2659,7 +2692,8 @@ def compact(text):
             if options.keepSections:
                 items = sorted(headers.items())
                 for i, v in items:
-                    page.append("Section::::" + v)
+                    #page.append("Section::::" + v)
+                    page.append(get_seciton_header_name(i,v))
             headers.clear()
             page.append(line)  # first line
             emptySection = False
@@ -2872,7 +2906,7 @@ def pages_from(input):
 
 
 def process_dump(input_file, template_file, out_file, file_size, file_compress,
-                 process_count):
+                 process_count, max_articles_count = 10000000):
     """
     :param input_file: name of the wikipedia dump file; '-' to read from stdin
     :param template_file: optional file with template definitions.
@@ -2881,6 +2915,8 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     :param file_compress: whether to compress files with bzip.
     :param process_count: number of extraction processes to spawn.
     """
+
+    print ('max articles to extract: ' + str(max_articles_count))
 
     if input_file == '-':
         input = sys.stdin
@@ -2996,6 +3032,8 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
             job = (id, revid, title, page, page_num)
             jobs_queue.put(job) # goes to any available extract_process
             page_num += 1
+            if (int(page_num) > int(max_articles_count)):
+                break
         page = None             # free memory
 
     input.close()
@@ -3131,6 +3169,7 @@ def main():
                                      description=__doc__)
     parser.add_argument("input",
                         help="XML wiki dump file")
+    parser.add_argument("--article_count", help = "Max number of wikipedia articles to extract", default=1000000)
     groupO = parser.add_argument_group('Output')
     groupO.add_argument("-o", "--output", default="text",
                         help="directory for extracted files (or '-' for dumping to stdout)")
@@ -3302,7 +3341,7 @@ def main():
             logging.info(str(len(options.filter_category_include)))
 
     process_dump(input_file, args.templates, output_path, file_size,
-                 args.compress, args.processes)
+                 args.compress, args.processes, args.article_count)
 
 def createLogger(quiet, debug, log_file):
     logger = logging.getLogger()

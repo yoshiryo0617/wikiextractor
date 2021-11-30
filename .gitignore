@@ -91,3 +91,8 @@ ENV/
 
 # Editor files
 *.idea
+
+.vscode/
+
+ver2.55_after.py
+ver2.55_before.py
